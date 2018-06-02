@@ -2,7 +2,7 @@
 more deep learning repertoire #2
 
 # Data
-'''
+```
 def make_sin_data(data_per_cycle=200, n_cycle=5):
     np.random.seed(0)
 
@@ -13,7 +13,7 @@ def make_sin_data(data_per_cycle=200, n_cycle=5):
     X /= np.std(X)
 
     return X.astype(np.float32)
-'''
+```
 
 # Network Architecture
 ![archi](./dlrepert02_archi.png "archi")

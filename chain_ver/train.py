@@ -45,16 +45,8 @@ def main():
     optimizer = optimizers.Adam()
     optimizer.setup(model)
 
-    # データ作成分割
-    X = make_sin_data()
-    n_data = len(X)
-    
-    # plt.scatter(theta, X)
-    # plt.show() 
-
-    # データセット
-    n_train = int(n_data * 0.8)
-    X_train, X_test = X[:n_train], X[n_train:]
+    # データ作成
+    X_train, X_test = make_sin_data()
 
     train_dataset = tuple_dataset.TupleDataset(X_train)
     test_dataset = tuple_dataset.TupleDataset(X_test)

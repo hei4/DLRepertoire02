@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import math
 import numpy as np
 
 import chainer
@@ -8,7 +9,7 @@ def make_sin_data(data_per_cycle=200, n_cycle=5, train_ratio=0.8):
     np.random.seed(0)
 
     n_data = n_cycle * data_per_cycle
-    theta = np.linspace(0., n_cycle * (2. * np.pi), num=n_data)
+    theta = np.linspace(0., n_cycle * (2. * math.pi), num=n_data)
 
     X = np.sin(theta) + 0.1 * (2. * np.random.rand(n_data) - 1.)
     X /= np.std(X)
@@ -21,48 +22,48 @@ def make_sin_data(data_per_cycle=200, n_cycle=5, train_ratio=0.8):
 
 
 class SequentialIterator(chainer.dataset.Iterator):
-    def __init__(self, dataset, batch_size=10, seq_len=5, repeat=True):
+    def __init__(self, dataset, batch_size, seq_len, repeat=True):
         self.dataset = dataset
         self.n_samples = len(dataset)
-        # self.n_epoch = n_epoch
-
-        self.seq_length = seq_len
+        
+        self.seq_len = seq_len  # for updater...
         self.batch_size = batch_size
         self.repeat = repeat
 
         self.epoch = 0
         self.detail_epoch = 0.
         self.iteration = 0
-        self.offset_list = np.random.randint(0, len(dataset), size=batch_size)  # バッチサイズ分だけ
-
-        self.is_new_epoch = False
+        self.update_offset_list()   # バッチサイズ分だけの起点のリスト
+        
+        self.sequence = 0
 
     def __next__(self):
+        # for test iteration...
         if not self.repeat and self.iteration * self.batch_size >= self.n_samples:
             raise StopIteration
 
         x, t = self.get_data()
         self.iteration += 1
+        
+        self.sequence += 1
 
-        self.detail_epoch = self.iteration * self.batch_size / self.n_samples
-
-        new_epoch = int(self.detail_epoch)
+        new_epoch = int(self.epoch_detail)
         if new_epoch > self.epoch:
             self.epoch = new_epoch
-            self.offset_list = np.random.randint(0, self.n_samples, size=self.batch_size)  # 新しいepochでは起点を新しくする
 
         return list(zip(x, t))
 
     @property
     def epoch_detail(self):
         # for estimate time
-        return self.detail_epoch
+        return self.iteration * self.batch_size / self.n_samples
+
+    def update_offset_list(self):
+        self.offset_list = np.random.randint(0, self.n_samples - 1 - self.seq_len, size=self.batch_size)
 
     def get_data(self):
-        # offset_listから抜き出したoffsetにiterを足すことで、バッチごとに異なるx,tのセットとなる
-        # さらにn_samplesでの剰余とすることで配列外へのアクセスを防いでいる
-        x = [self.dataset[(offset + self.iteration) % self.n_samples][0]
-             for offset in self.offset_list]
-        t = [self.dataset[(offset + self.iteration + 1) % self.n_samples][0]
-             for offset in self.offset_list]
+        # offset_listから抜き出したoffsetにsequenceを足すことで、バッチごとに異なるx,tのセットとなる
+        x = [self.dataset[offset + self.sequence    ][0] for offset in self.offset_list]
+        t = [self.dataset[offset + self.sequence + 1][0] for offset in self.offset_list]
         return x, t
+

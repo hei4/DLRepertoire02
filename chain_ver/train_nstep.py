@@ -10,11 +10,22 @@ import chainer.functions as F
 import chainer.links as L
 from chainer import training, optimizers
 from chainer.training import extensions
-from chainer.dataset.convert import concat_examples
 
-from net import LSTMNet
-from util import SequentialIterator, make_sin_data
-from update import SequentialUpdater
+from net import NStepLSTMNet
+from util import NStepSequentialIterator, make_sin_data
+from update import NStepSequentialUpdater
+
+
+def mean_squared_error(ys, ts):
+    cys = F.concat(ys, axis=0)
+    cts = F.concat(ts, axis=0)
+    return F.mean_squared_error(cys, cts)
+
+
+def r2_score(ys, ts):
+    cys = F.concat(ys, axis=0)
+    cts = F.concat(ts, axis=0)
+    return F.r2_score(cys, cts)
 
 
 def main():
@@ -30,7 +41,7 @@ def main():
                         help='Frequency of taking a snapshot')
     parser.add_argument('--gpu', '-g', type=int, default=-1,
                         help='GPU ID (negative value indicates CPU)')
-    parser.add_argument('--out', '-o', default='result',
+    parser.add_argument('--out', '-o', default='result_nstep',
                         help='Directory to output the result')
     parser.add_argument('--resume', '-r', default='',
                         help='Resume the training from snapshot')
@@ -41,8 +52,8 @@ def main():
     
     args = parser.parse_args()
 
-    net = LSTMNet(args.unit, 1)
-    model = L.Classifier(net, lossfun=F.mean_squared_error, accfun=F.r2_score)
+    net = NStepLSTMNet(n_layer=1, n_unit=args.unit, n_out=1)
+    model = L.Classifier(net, lossfun=mean_squared_error, accfun=r2_score)
     if args.gpu >= 0:
         chainer.backends.cuda.get_device_from_id(args.gpu).use()
         model.to_gpu()  # Copy the model to the GPU
@@ -53,23 +64,29 @@ def main():
     # データ作成
     data_per_cycle, n_cycle, train_ratio = 200, 5, 0.8
     X_train, X_test = make_sin_data(data_per_cycle=data_per_cycle, n_cycle=n_cycle, train_ratio=train_ratio)
-    
-    if len(X_train) % (args.batchsize * args.seqlen) != 0:
-        print('ABORT. {}(X_train) % ({}(batch) * {}(seq)) != 0 ...'.format(len(X_train), args.batchsize, args.seqlen))
-        return
 
-    train_iter = SequentialIterator(X_train, batch_size=args.batchsize, seq_len=args.seqlen)
-    test_iter = SequentialIterator(X_test,  batch_size=args.batchsize, seq_len=args.seqlen, repeat=False)
-    
-    def simple_converter(batch, device=None, padding=None):
-        new_batch = []
+    train_iter = NStepSequentialIterator(X_train, batch_size=args.batchsize, seq_len=args.seqlen)
+    test_iter = NStepSequentialIterator(X_test, batch_size=args.batchsize, seq_len=args.seqlen, repeat=False)
+
+    def sequential_converter(batch, device=None):
+        if device is None:
+            def to_device(x):
+                return x
+        elif device < 0:
+            def to_device(x):
+                return chainer.cuda.to_cpu(x)
+        else:
+            def to_device(x):
+                return chainer.cuda.to_gpu(x, device, chainer.cuda.Stream.null)
+
+        xs = []
+        ts = []
         for x, t in batch:
-            x = np.array(x, dtype=np.float32).reshape(1)
-            t = np.array(t, dtype=np.float32).reshape(1)
-            new_batch.append((x, t))
-        return concat_examples(new_batch, device=device, padding=padding)
+            xs.append(to_device(x))
+            ts.append(to_device(t))
+        return xs, ts
 
-    updater = SequentialUpdater(train_iter, optimizer, device=args.gpu, converter=simple_converter)
+    updater = NStepSequentialUpdater(train_iter, optimizer, device=args.gpu, converter=sequential_converter)
     trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=args.out)
 
     eval_model = model.copy()
@@ -77,8 +94,7 @@ def main():
     eval_rnn.train = False
 
     trainer.extend(extensions.Evaluator(
-            test_iter, eval_model, device=args.gpu, converter=simple_converter,
-            eval_hook=lambda _: eval_rnn.reset_state()))
+        test_iter, eval_model, device=args.gpu, converter=sequential_converter))
 
     trainer.extend(extensions.dump_graph('main/loss'))
 
@@ -121,12 +137,12 @@ def main():
         X_train = chainer.cuda.to_gpu(X_train)
 
     predictor = model.predictor
-    predictor.reset_state()
-    y_train = [X_train[0]]
 
-    for i in range(n_train - 1):
-        y = predictor(chainer.Variable(X_train[i].reshape((-1,1))))
-        y_train.append(y.data)
+    y = predictor(list(X_train[:-1].reshape(1, -1)))
+    cy = F.concat(y, axis=0)
+
+    y_train = [X_train[0]]
+    y_train.extend(cy.reshape(-1, ).data)
 
     if args.gpu >= 0:
         X_train = chainer.cuda.to_cpu(X_train)
